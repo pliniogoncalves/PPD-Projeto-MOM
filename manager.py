@@ -3,7 +3,6 @@ from mqtt_client import MQTTClient
 import queue
 
 UNIQUE_PREFIX = "ppd-plinio-final/"
-
 COLOR_ONLINE = "#1F6AA5"
 COLOR_OFFLINE = "#C21807"
 
@@ -24,16 +23,13 @@ class ManagerApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.grid_columnconfigure(0, weight=1); self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1); self.grid_rowconfigure(1, weight=1)
-        
         self.users = []
         self.topics = []
         self.message_counts = {}
         self.user_status = {}
-        
         self.create_widgets()
         self.gui_queue = queue.Queue()
         self.mqtt_client = MQTTClient(broker_address="broker.hivemq.com", on_message_callback=self.on_message)
-        
         if self.mqtt_client.connect():
             self.mqtt_client.subscribe(f"{TOPIC_USERS}/+")
             self.mqtt_client.subscribe(f"{TOPIC_TOPICS}/+")
@@ -43,16 +39,16 @@ class ManagerApp(ctk.CTk):
             self.add_log("Cliente MQTT conectado e inscrito nos tópicos.")
         else:
             self.add_log("FALHA AO CONECTAR AO BROKER. Verifique a conexão com a internet.")
-        
         self.process_gui_queue()
-    
+
     def process_gui_queue(self):
         try:
             while True:
                 task = self.gui_queue.get_nowait()
                 if task: task()
         except queue.Empty: pass
-        finally: self.after(100, self.process_gui_queue)
+        finally:
+            self.after(100, self.process_gui_queue)
 
     def on_message(self, client, userdata, message):
         self.gui_queue.put(lambda: self.handle_message(message.topic, message.payload.decode()))
@@ -63,6 +59,16 @@ class ManagerApp(ctk.CTk):
         elif topic.startswith(TOPIC_USERS): self.handle_user_sync(topic, payload)
         elif topic.startswith(TOPIC_TOPICS): self.handle_topic_sync(topic, payload)
         elif topic == TOPIC_PRESENCE: self.handle_presence_update(payload)
+
+    def handle_presence_update(self, payload):
+        try:
+            user_name, status = payload.split(":")
+            if user_name in self.users:
+                self.user_status[user_name] = status
+                self.add_log(f"PRESENÇA: {user_name} está {status}")
+                self.update_user_list_display()
+        except ValueError:
+            pass
 
     def handle_user_message(self, topic, payload):
         if payload:
@@ -78,15 +84,7 @@ class ManagerApp(ctk.CTk):
             self.message_counts[user_name] -= 1
             self.add_log(f"INFO: {user_name} confirmou recebimento. Contador decrementado.")
             self.update_counts_display()
-    
-    def handle_presence_update(self, payload):
-        try:
-            user_name, status = payload.split(":")
-            self.user_status[user_name] = status
-            self.add_log(f"PRESENÇA: {user_name} está {status}")
-            self.update_user_list_display()
-        except ValueError: pass
-    
+
     def handle_user_sync(self, topic, payload):
         user_name = topic.split('/')[-1]
         if payload == "ADD":
@@ -116,7 +114,6 @@ class ManagerApp(ctk.CTk):
                 self.topics.remove(topic_name)
                 self.add_log(f"INFO: Tópico '{topic_name}' removido.")
                 self.update_topic_list_display()
-    
     def create_widgets(self):
         user_frame = ctk.CTkFrame(self)
         user_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
@@ -222,23 +219,18 @@ class ManagerApp(ctk.CTk):
                 
     def create_user_list_item(self, user_name, is_online):
         color = COLOR_ONLINE if is_online else COLOR_OFFLINE
-        
         item_frame = ctk.CTkFrame(self.user_list_frame)
         item_frame.pack(fill="x", padx=5, pady=2)
         item_frame.grid_columnconfigure(1, weight=1)
-
         dot_label = ctk.CTkLabel(item_frame, text="●", text_color=color, font=ctk.CTkFont(size=18))
         dot_label.grid(row=0, column=0, sticky="w", padx=(5,2))
-        
         name_label = ctk.CTkLabel(item_frame, text=user_name, anchor="w")
         name_label.grid(row=0, column=1, sticky="ew")
-        
         remove_button = ctk.CTkButton(item_frame, text="Remover", width=70, command=lambda name=user_name: self.remove_user(name))
         remove_button.grid(row=0, column=2, padx=5)
 
     def update_topic_list_display(self):
-        for widget in self.topic_list_frame.winfo_children():
-            widget.destroy()
+        for widget in self.topic_list_frame.winfo_children(): widget.destroy()
         
         for topic_name in sorted(self.topics):
             item_frame = ctk.CTkFrame(self.topic_list_frame)
