@@ -6,13 +6,14 @@ UNIQUE_PREFIX = "ppd-plinio-final/"
 COLOR_ONLINE = "#1F6AA5"
 COLOR_OFFLINE = "#C21807"
 
-TOPIC_USERS = f"{UNIQUE_PREFIX}sistema/gerenciamento/usuarios"
-TOPIC_TOPICS = f"{UNIQUE_PREFIX}sistema/gerenciamento/topicos"
+TOPIC_MGMT_USERS = f"{UNIQUE_PREFIX}sistema/gerenciamento/usuarios"
+TOPIC_MGMT_TOPICS = f"{UNIQUE_PREFIX}sistema/gerenciamento/topicos"
 TOPIC_PRESENCE = f"{UNIQUE_PREFIX}sistema/presenca"
 TOPIC_USER_MSG_BASE = f"{UNIQUE_PREFIX}usuarios"
 TOPIC_USER_MSG_WILDCARD = f"{TOPIC_USER_MSG_BASE}/+"
 TOPIC_ACK_BASE = f"{UNIQUE_PREFIX}sistema/ack"
 TOPIC_ACK_WILDCARD = f"{TOPIC_ACK_BASE}/+"
+TOPIC_AUTH_REQUEST = f"{UNIQUE_PREFIX}sistema/auth/request"
 
 
 class ManagerApp(ctk.CTk):
@@ -31,16 +32,17 @@ class ManagerApp(ctk.CTk):
         self.gui_queue = queue.Queue()
         self.mqtt_client = MQTTClient(broker_address="broker.hivemq.com", on_message_callback=self.on_message)
         if self.mqtt_client.connect():
-            self.mqtt_client.subscribe(f"{TOPIC_USERS}/+")
-            self.mqtt_client.subscribe(f"{TOPIC_TOPICS}/+")
+            self.mqtt_client.subscribe(f"{TOPIC_MGMT_USERS}/+")
+            self.mqtt_client.subscribe(f"{TOPIC_MGMT_TOPICS}/+")
             self.mqtt_client.subscribe(TOPIC_USER_MSG_WILDCARD)
             self.mqtt_client.subscribe(TOPIC_ACK_WILDCARD)
             self.mqtt_client.subscribe(TOPIC_PRESENCE)
+            self.mqtt_client.subscribe(TOPIC_AUTH_REQUEST)
             self.add_log("Cliente MQTT conectado e inscrito nos tópicos.")
         else:
-            self.add_log("FALHA AO CONECTAR AO BROKER. Verifique a conexão com a internet.")
+            self.add_log("FALHA AO CONECTAR AO BROKER.")
         self.process_gui_queue()
-
+    
     def process_gui_queue(self):
         try:
             while True:
@@ -52,13 +54,26 @@ class ManagerApp(ctk.CTk):
 
     def on_message(self, client, userdata, message):
         self.gui_queue.put(lambda: self.handle_message(message.topic, message.payload.decode()))
-
+        
     def handle_message(self, topic, payload):
         if topic.startswith(TOPIC_USER_MSG_BASE): self.handle_user_message(topic, payload)
         elif topic.startswith(TOPIC_ACK_BASE): self.handle_ack_message(topic)
-        elif topic.startswith(TOPIC_USERS): self.handle_user_sync(topic, payload)
-        elif topic.startswith(TOPIC_TOPICS): self.handle_topic_sync(topic, payload)
+        elif topic.startswith(TOPIC_MGMT_USERS): self.handle_user_sync(topic, payload)
+        elif topic.startswith(TOPIC_MGMT_TOPICS): self.handle_topic_sync(topic, payload)
         elif topic == TOPIC_PRESENCE: self.handle_presence_update(payload)
+        elif topic == TOPIC_AUTH_REQUEST: self.handle_auth_request(payload)
+
+    def handle_auth_request(self, payload):
+        try:
+            user_to_check, response_topic = payload.split(";")
+            if user_to_check in self.users:
+                self.mqtt_client.publish(response_topic, "VALIDO")
+                self.add_log(f"AUTH: Login validado para o usuário '{user_to_check}'.")
+            else:
+                self.mqtt_client.publish(response_topic, "INVALIDO")
+                self.add_log(f"AUTH: Login negado para o usuário inexistente '{user_to_check}'.")
+        except ValueError:
+            self.add_log(f"AUTH: Recebida requisição de autenticação mal formatada: {payload}")
 
     def handle_presence_update(self, payload):
         try:
@@ -67,8 +82,7 @@ class ManagerApp(ctk.CTk):
                 self.user_status[user_name] = status
                 self.add_log(f"PRESENÇA: {user_name} está {status}")
                 self.update_user_list_display()
-        except ValueError:
-            pass
+        except ValueError: pass
 
     def handle_user_message(self, topic, payload):
         if payload:
@@ -114,6 +128,7 @@ class ManagerApp(ctk.CTk):
                 self.topics.remove(topic_name)
                 self.add_log(f"INFO: Tópico '{topic_name}' removido.")
                 self.update_topic_list_display()
+
     def create_widgets(self):
         user_frame = ctk.CTkFrame(self)
         user_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
@@ -170,13 +185,13 @@ class ManagerApp(ctk.CTk):
         if user_name in self.users:
             self.add_log(f"ERRO: Usuário '{user_name}' já existe.")
             return
-        self.mqtt_client.publish(f"{TOPIC_USERS}/{user_name}", "ADD", retain=True)
+        self.mqtt_client.publish(f"{TOPIC_MGMT_USERS}/{user_name}", "ADD", retain=True)
         self.add_log(f"Comando para adicionar usuário '{user_name}' publicado.")
         self.user_entry.delete(0, "end")
     
     def remove_user(self, user_name):
         self.mqtt_client.publish(TOPIC_PRESENCE, f"{user_name}:OFFLINE", retain=True)
-        self.mqtt_client.publish(f"{TOPIC_USERS}/{user_name}", "", retain=True)
+        self.mqtt_client.publish(f"{TOPIC_MGMT_USERS}/{user_name}", "", retain=True)
         self.add_log(f"Comando para remover usuário '{user_name}' publicado.")
 
     def add_topic(self):
@@ -187,12 +202,12 @@ class ManagerApp(ctk.CTk):
         if topic_name in self.topics:
             self.add_log(f"ERRO: Tópico '{topic_name}' já existe.")
             return
-        self.mqtt_client.publish(f"{TOPIC_TOPICS}/{topic_name}", "ADD", retain=True)
+        self.mqtt_client.publish(f"{TOPIC_MGMT_TOPICS}/{topic_name}", "ADD", retain=True)
         self.add_log(f"Comando para adicionar tópico '{topic_name}' publicado.")
         self.topic_entry.delete(0, "end")
 
     def remove_topic(self, topic_name):
-        self.mqtt_client.publish(f"{TOPIC_TOPICS}/{topic_name}", "", retain=True)
+        self.mqtt_client.publish(f"{TOPIC_MGMT_TOPICS}/{topic_name}", "", retain=True)
         self.add_log(f"Comando para remover tópico '{topic_name}' publicado.")
 
     def update_all_displays(self):
@@ -201,16 +216,13 @@ class ManagerApp(ctk.CTk):
     
     def update_user_list_display(self):
         for widget in self.user_list_frame.winfo_children(): widget.destroy()
-
         online_users = [u for u in self.users if self.user_status.get(u) == "ONLINE"]
         offline_users = [u for u in self.users if self.user_status.get(u) != "ONLINE"]
-
         if online_users:
             header = ctk.CTkLabel(self.user_list_frame, text=f"Online ({len(online_users)})", font=ctk.CTkFont(weight="bold"))
             header.pack(anchor="w", padx=5, pady=(5, 2))
             for user_name in sorted(online_users):
                 self.create_user_list_item(user_name, True)
-
         if offline_users:
             header = ctk.CTkLabel(self.user_list_frame, text=f"Offline ({len(offline_users)})", font=ctk.CTkFont(weight="bold"))
             header.pack(anchor="w", padx=5, pady=(10, 2))

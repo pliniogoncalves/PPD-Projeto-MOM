@@ -2,10 +2,12 @@ import customtkinter as ctk
 from mqtt_client import MQTTClient
 import datetime
 import queue
+import uuid
 
 UNIQUE_PREFIX = "ppd-plinio-final/"
 COLOR_ONLINE = "#1F6AA5"
 COLOR_OFFLINE = "#C21807"
+COLOR_VALID = "#009E00"
 
 TOPIC_MGMT_USERS = f"{UNIQUE_PREFIX}sistema/gerenciamento/usuarios"
 TOPIC_MGMT_TOPICS = f"{UNIQUE_PREFIX}sistema/gerenciamento/topicos"
@@ -15,6 +17,8 @@ TOPIC_PRESENCE = f"{UNIQUE_PREFIX}sistema/presenca"
 TOPIC_PRESENCE_REQUEST = f"{UNIQUE_PREFIX}sistema/presenca/requisicao"
 TOPIC_USER_MSG_BASE = f"{UNIQUE_PREFIX}usuarios"
 TOPIC_ACK_BASE = f"{UNIQUE_PREFIX}sistema/ack"
+TOPIC_AUTH_REQUEST = f"{UNIQUE_PREFIX}sistema/auth/request"
+TOPIC_AUTH_RESPONSE_BASE = f"{UNIQUE_PREFIX}sistema/auth/response"
 
 
 class UserApp(ctk.CTk):
@@ -24,6 +28,7 @@ class UserApp(ctk.CTk):
         self.geometry("400x250")
         self.user_name = None
         self.mqtt_client = None
+        self.auth_client = None
         self.users = []
         self.topics = set()
         self.active_subscriptions = set()
@@ -31,18 +36,56 @@ class UserApp(ctk.CTk):
         self.gui_queue = queue.Queue()
         self.create_login_widgets()
     
-    def process_gui_queue(self):
-        try:
-            while True:
-                task = self.gui_queue.get_nowait()
-                if task: task()
-        except queue.Empty: pass
-        finally:
-            self.after(100, self.process_gui_queue)
+    def create_login_widgets(self):
+        self.login_frame = ctk.CTkFrame(self)
+        self.login_frame.pack(padx=20, pady=20, fill="both", expand=True)
+        label = ctk.CTkLabel(self.login_frame, text="Digite seu nome de usuário:", font=ctk.CTkFont(size=15))
+        label.pack(pady=10)
+        self.username_entry = ctk.CTkEntry(self.login_frame, width=200)
+        self.username_entry.pack(pady=10)
+        self.login_button = ctk.CTkButton(self.login_frame, text="Entrar", command=self.start_login_validation)
+        self.login_button.pack(pady=20)
+        self.username_entry.bind("<Return>", lambda event: self.start_login_validation())
+        self.status_label = ctk.CTkLabel(self.login_frame, text="")
+        self.status_label.pack(pady=(0, 10))
 
-    def login(self):
+    def start_login_validation(self):
+        """ NOVO: Inicia o processo de validação em 2 etapas. """
         self.user_name = self.username_entry.get().strip()
-        if not self.user_name: return
+        if not self.user_name:
+            self.status_label.configure(text="Nome de usuário não pode ser vazio.", text_color=COLOR_OFFLINE)
+            return
+
+        self.login_button.configure(state="disabled", text="Validando...")
+        self.status_label.configure(text="Conectando para validar...", text_color="gray")
+
+        response_id = str(uuid.uuid4())
+        self.auth_response_topic = f"{TOPIC_AUTH_RESPONSE_BASE}/{response_id}"
+        self.auth_client = MQTTClient(broker_address="broker.hivemq.com", on_message_callback=self.handle_auth_response)
+        
+        if self.auth_client.connect():
+            self.auth_client.subscribe(self.auth_response_topic)
+            payload = f"{self.user_name};{self.auth_response_topic}"
+            self.auth_client.publish(TOPIC_AUTH_REQUEST, payload)
+            self.status_label.configure(text="Aguardando validação do gerente...")
+        else:
+            self.status_label.configure(text="Erro de conexão. Tente novamente.", text_color=COLOR_OFFLINE)
+            self.login_button.configure(state="normal", text="Entrar")
+
+    def handle_auth_response(self, client, userdata, message):
+        """ NOVO: Processa a resposta do gerente. """
+        payload = message.payload.decode()
+        self.auth_client.disconnect()
+
+        if payload == "VALIDO":
+            self.status_label.configure(text="Usuário válido! Entrando...", text_color=COLOR_VALID)
+            self.after(500, self.proceed_with_main_login)
+        else:
+            self.status_label.configure(text="Usuário inválido ou não cadastrado.", text_color=COLOR_OFFLINE)
+            self.login_button.configure(state="normal", text="Entrar")
+            
+    def proceed_with_main_login(self):
+        """ NOVO: Lógica principal de login, só executa após validação. """
         self.login_frame.destroy()
         self.geometry("900x700")
         self.title(f"MOM - Usuário: {self.user_name}")
@@ -66,6 +109,15 @@ class UserApp(ctk.CTk):
         else:
             self.add_log("FALHA AO CONECTAR. Saindo...")
             self.after(2000, self.destroy)
+
+    def process_gui_queue(self):
+        try:
+            while True:
+                task = self.gui_queue.get_nowait()
+                if task: task()
+        except queue.Empty: pass
+        finally:
+            self.after(100, self.process_gui_queue)
 
     def on_message(self, client, userdata, message):
         self.gui_queue.put(lambda: self.handle_message(message.topic, message.payload.decode()))
@@ -125,30 +177,6 @@ class UserApp(ctk.CTk):
     def request_presence_status(self):
         self.mqtt_client.publish(TOPIC_PRESENCE_REQUEST, "who_is_online")
         self.add_log("Sincronizando status de presença...")
-
-    def update_topics_list_display(self):
-        for widget in self.topics_list_frame.winfo_children(): widget.destroy()
-        
-        for topic_name in sorted(list(self.topics)):
-            is_subscribed = topic_name in self.active_subscriptions
-            btn_text = f"{topic_name} (Sair)" if is_subscribed else topic_name
-            btn_fg_color = ("#4A4A4A", "#555555") if is_subscribed else ("#3B8ED0", "#1F6AA5")
-            
-            btn_command = lambda t=topic_name, sub=is_subscribed: self.unsubscribe_from_topic(t) if sub else self.subscribe_to_topic(t)
-            
-            btn = ctk.CTkButton(self.topics_list_frame, text=btn_text, command=btn_command, fg_color=btn_fg_color)
-            btn.pack(padx=10, pady=5, fill="x")
-
-    def create_login_widgets(self):
-        self.login_frame = ctk.CTkFrame(self)
-        self.login_frame.pack(padx=20, pady=20, fill="both", expand=True)
-        label = ctk.CTkLabel(self.login_frame, text="Digite seu nome de usuário:", font=ctk.CTkFont(size=15))
-        label.pack(pady=10)
-        self.username_entry = ctk.CTkEntry(self.login_frame, width=200)
-        self.username_entry.pack(pady=10)
-        login_button = ctk.CTkButton(self.login_frame, text="Entrar", command=self.login)
-        login_button.pack(pady=20)
-        self.username_entry.bind("<Return>", lambda event: self.login())
 
     def setup_main_ui(self):
         self.grid_columnconfigure(0, weight=1); self.grid_columnconfigure(1, weight=2)
@@ -246,6 +274,17 @@ class UserApp(ctk.CTk):
         self.add_log(f"Inscrição cancelada para: {topic_name}")
         self.update_topics_list_display()
         self.update_send_selectors()
+        
+    def update_topics_list_display(self):
+        for widget in self.topics_list_frame.winfo_children(): widget.destroy()
+        
+        for topic_name in sorted(list(self.topics)):
+            is_subscribed = topic_name in self.active_subscriptions
+            btn_text = f"{topic_name} (Sair)" if is_subscribed else topic_name
+            btn_fg_color = ("#4A4A4A", "#555555") if is_subscribed else ("#3B8ED0", "#1F6AA5")
+            btn_command = lambda t=topic_name, sub=is_subscribed: self.unsubscribe_from_topic(t) if sub else self.subscribe_to_topic(t)
+            btn = ctk.CTkButton(self.topics_list_frame, text=btn_text, command=btn_command, fg_color=btn_fg_color)
+            btn.pack(padx=10, pady=5, fill="x")
 
     def update_users_list_display(self):
         for widget in self.users_list_frame.winfo_children(): widget.destroy()
@@ -272,6 +311,7 @@ class UserApp(ctk.CTk):
         name_label.pack(side="left")
 
     def on_closing(self):
+        if self.auth_client: self.auth_client.disconnect()
         if self.mqtt_client and self.user_name:
             self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:OFFLINE", retain=True)
             self.mqtt_client.disconnect()
