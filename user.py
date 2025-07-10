@@ -6,6 +6,7 @@ import queue
 TOPIC_USERS_WILDCARD = "sistema/gerenciamento/usuarios/+"
 TOPIC_TOPICS_WILDCARD = "sistema/gerenciamento/topicos/+"
 TOPIC_PRESENCE = "sistema/presenca"
+TOPIC_PRESENCE_REQUEST = "sistema/presenca/requisicao"
 
 
 class UserApp(ctk.CTk):
@@ -28,7 +29,8 @@ class UserApp(ctk.CTk):
                 task = self.gui_queue.get_nowait()
                 if task: task()
         except queue.Empty: pass
-        finally: self.after(100, self.process_gui_queue)
+        finally:
+            self.after(100, self.process_gui_queue)
 
     def login(self):
         self.user_name = self.username_entry.get().strip()
@@ -40,7 +42,7 @@ class UserApp(ctk.CTk):
 
         will_payload = f"{self.user_name}:OFFLINE"
         self.mqtt_client = MQTTClient(broker_address="broker.hivemq.com", on_message_callback=self.on_message,
-                                      will_topic=TOPIC_PRESENCE, will_payload=will_payload)
+                                      will_topic=TOPIC_PRESENCE, will_payload=will_payload, will_retain=True)
         
         if self.mqtt_client.connect():
             self.personal_topic = f"usuarios/{self.user_name}"
@@ -48,8 +50,10 @@ class UserApp(ctk.CTk):
             self.mqtt_client.subscribe(TOPIC_USERS_WILDCARD)
             self.mqtt_client.subscribe(TOPIC_TOPICS_WILDCARD)
             self.mqtt_client.subscribe(TOPIC_PRESENCE)
+            self.mqtt_client.subscribe(TOPIC_PRESENCE_REQUEST)
             
-            self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:ONLINE", retain=True)
+            self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:ONLINE", retain=False)
+            self.request_presence_status()
             
             self.add_log(f"Conectado como '{self.user_name}'. Escutando em '{self.personal_topic}'.")
             self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -65,28 +69,58 @@ class UserApp(ctk.CTk):
         if topic == self.personal_topic:
             self.add_log(f"(Privado) de {payload}")
             self.mqtt_client.publish(f"sistema/ack/{self.user_name}", "ACK")
+        
         elif topic == TOPIC_PRESENCE:
             self.handle_presence_update(payload)
+            
+        elif topic == TOPIC_PRESENCE_REQUEST:
+            self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:ONLINE", retain=False)
+            
         elif topic.startswith("sistema/gerenciamento/usuarios/"):
             user = topic.split('/')[-1]
             if not payload and user in self.users: self.users.remove(user)
             elif payload == "ADD" and user not in self.users: self.users.append(user)
             self.update_users_list_display()
+            
         elif topic.startswith("sistema/gerenciamento/topicos/"):
             new_topic = topic.split('/')[-1]
             if not payload and new_topic in self.topics: self.topics.remove(new_topic)
             elif payload == "ADD" and new_topic not in self.topics: self.topics.append(new_topic)
             self.update_topics_list_display()
+            
         elif topic in self.active_subscriptions:
             self.add_log(f"({topic}) | {payload}")
 
     def handle_presence_update(self, payload):
         try:
             user_name, status = payload.split(":")
-            self.user_status[user_name] = status
-            self.update_users_list_display()
+            if self.user_status.get(user_name) != status:
+                self.user_status[user_name] = status
+                self.update_users_list_display()
         except ValueError: pass
 
+    def request_presence_status(self):
+        """Pede para todos os clientes online reportarem seu status."""
+        self.mqtt_client.publish(TOPIC_PRESENCE_REQUEST, "who_is_online")
+        self.add_log("Sincronizando status de presença...")
+
+    def on_closing(self):
+        if self.mqtt_client and self.user_name:
+            self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:OFFLINE", retain=True)
+            self.mqtt_client.disconnect()
+        self.destroy()
+
+    def create_login_widgets(self):
+        self.login_frame = ctk.CTkFrame(self)
+        self.login_frame.pack(padx=20, pady=20, fill="both", expand=True)
+        label = ctk.CTkLabel(self.login_frame, text="Digite seu nome de usuário:", font=ctk.CTkFont(size=15))
+        label.pack(pady=10)
+        self.username_entry = ctk.CTkEntry(self.login_frame, width=200)
+        self.username_entry.pack(pady=10)
+        login_button = ctk.CTkButton(self.login_frame, text="Entrar", command=self.login)
+        login_button.pack(pady=20)
+        self.username_entry.bind("<Return>", lambda event: self.login())
+        
     def setup_main_ui(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=2)
@@ -122,6 +156,38 @@ class UserApp(ctk.CTk):
         send_user_button = ctk.CTkButton(right_frame, text="Enviar para Usuário (Offline)", command=self.send_to_user)
         send_user_button.grid(row=3, column=1, sticky="ew", padx=10, pady=10)
 
+    def add_log(self, message):
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.log_textbox.configure(state="normal")
+        self.log_textbox.insert("end", f"[{timestamp}] {message}\n")
+        self.log_textbox.configure(state="disabled")
+        self.log_textbox.see("end")
+        
+    def send_to_topic(self):
+        topic = self.topic_entry.get().strip()
+        message = self.topic_msg_entry.get().strip()
+        if not topic or not message:
+            self.add_log("ALERTA: Tópico e mensagem não podem ser vazios.")
+            return
+        full_message = f"{self.user_name}: {message}"
+        self.mqtt_client.publish(topic, full_message)
+        self.add_log(f"Você para ({topic}): {message}")
+        self.topic_entry.delete(0, "end")
+        self.topic_msg_entry.delete(0, "end")
+
+    def send_to_user(self):
+        recipient = self.user_entry.get().strip()
+        message = self.user_msg_entry.get().strip()
+        if not recipient or not message:
+            self.add_log("ALERTA: Usuário e mensagem não podem ser vazios.")
+            return
+        payload = f"{self.user_name}: {message}"
+        recipient_topic = f"usuarios/{recipient}"
+        self.mqtt_client.publish(recipient_topic, payload, retain=True)
+        self.add_log(f"Você para (Privado) {recipient}: {message}")
+        self.user_entry.delete(0, "end")
+        self.user_msg_entry.delete(0, "end")
+
     def subscribe_to_topic(self, topic):
         self.mqtt_client.subscribe(topic)
         self.active_subscriptions.add(topic)
@@ -155,55 +221,6 @@ class UserApp(ctk.CTk):
             indicator = "🟢" if status == "ONLINE" else "⚪"
             label = ctk.CTkLabel(self.users_list_frame, text=f"{indicator} {user}")
             label.pack(padx=10, pady=5, anchor="w")
-
-    def on_closing(self):
-        if self.mqtt_client and self.user_name:
-            self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:OFFLINE", retain=True)
-            self.mqtt_client.disconnect()
-        self.destroy()
-        
-    def create_login_widgets(self):
-        self.login_frame = ctk.CTkFrame(self)
-        self.login_frame.pack(padx=20, pady=20, fill="both", expand=True)
-        label = ctk.CTkLabel(self.login_frame, text="Digite seu nome de usuário:", font=ctk.CTkFont(size=15))
-        label.pack(pady=10)
-        self.username_entry = ctk.CTkEntry(self.login_frame, width=200)
-        self.username_entry.pack(pady=10)
-        login_button = ctk.CTkButton(self.login_frame, text="Entrar", command=self.login)
-        login_button.pack(pady=20)
-        self.username_entry.bind("<Return>", lambda event: self.login())
-        
-    def add_log(self, message):
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log_textbox.configure(state="normal")
-        self.log_textbox.insert("end", f"[{timestamp}] {message}\n")
-        self.log_textbox.configure(state="disabled")
-        self.log_textbox.see("end")
-        
-    def send_to_topic(self):
-        topic = self.topic_entry.get().strip()
-        message = self.topic_msg_entry.get().strip()
-        if not topic or not message:
-            self.add_log("ALERTA: Tópico e mensagem não podem ser vazios.")
-            return
-        full_message = f"{self.user_name}: {message}"
-        self.mqtt_client.publish(topic, full_message)
-        self.add_log(f"Você para ({topic}): {message}")
-        self.topic_entry.delete(0, "end")
-        self.topic_msg_entry.delete(0, "end")
-
-    def send_to_user(self):
-        recipient = self.user_entry.get().strip()
-        message = self.user_msg_entry.get().strip()
-        if not recipient or not message:
-            self.add_log("ALERTA: Usuário e mensagem não podem ser vazios.")
-            return
-        payload = f"{self.user_name}: {message}"
-        recipient_topic = f"usuarios/{recipient}"
-        self.mqtt_client.publish(recipient_topic, payload, retain=True)
-        self.add_log(f"Você para (Privado) {recipient}: {message}")
-        self.user_entry.delete(0, "end")
-        self.user_msg_entry.delete(0, "end")
 
 if __name__ == "__main__":
     app = UserApp()
