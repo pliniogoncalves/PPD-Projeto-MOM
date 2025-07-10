@@ -2,6 +2,9 @@ import customtkinter as ctk
 from mqtt_client import MQTTClient
 import queue
 
+COLOR_ONLINE = "#1F6AA5" 
+COLOR_OFFLINE = "#C21807"
+
 TOPIC_USERS = "sistema/gerenciamento/usuarios"
 TOPIC_TOPICS = "sistema/gerenciamento/topicos"
 TOPIC_PRESENCE = "sistema/presenca"
@@ -38,7 +41,7 @@ class ManagerApp(ctk.CTk):
             self.add_log("FALHA AO CONECTAR AO BROKER. Verifique a conexão com a internet.")
         
         self.process_gui_queue()
-
+    
     def process_gui_queue(self):
         try:
             while True:
@@ -109,6 +112,41 @@ class ManagerApp(ctk.CTk):
                 self.add_log(f"INFO: Tópico '{topic_name}' removido.")
                 self.update_topic_list_display()
 
+    def update_user_list_display(self):
+        for widget in self.user_list_frame.winfo_children(): widget.destroy()
+
+        online_users = [u for u in self.users if self.user_status.get(u) == "ONLINE"]
+        offline_users = [u for u in self.users if self.user_status.get(u) != "ONLINE"]
+
+        if online_users:
+            header = ctk.CTkLabel(self.user_list_frame, text=f"Online ({len(online_users)})", font=ctk.CTkFont(weight="bold"))
+            header.pack(anchor="w", padx=5, pady=(5, 2))
+            for user_name in sorted(online_users):
+                self.create_user_list_item(user_name, True)
+
+        if offline_users:
+            header = ctk.CTkLabel(self.user_list_frame, text=f"Offline ({len(offline_users)})", font=ctk.CTkFont(weight="bold"))
+            header.pack(anchor="w", padx=5, pady=(10, 2))
+            for user_name in sorted(offline_users):
+                self.create_user_list_item(user_name, False)
+    
+    def create_user_list_item(self, user_name, is_online):
+        # --- MELHORIA: Item da lista com cor e botão ---
+        color = COLOR_ONLINE if is_online else COLOR_OFFLINE
+        
+        item_frame = ctk.CTkFrame(self.user_list_frame)
+        item_frame.pack(fill="x", padx=5, pady=2)
+        item_frame.grid_columnconfigure(1, weight=1)
+
+        dot_label = ctk.CTkLabel(item_frame, text="●", text_color=color, font=ctk.CTkFont(size=18))
+        dot_label.grid(row=0, column=0, sticky="w", padx=(5,2))
+        
+        name_label = ctk.CTkLabel(item_frame, text=user_name, anchor="w")
+        name_label.grid(row=0, column=1, sticky="ew")
+        
+        remove_button = ctk.CTkButton(item_frame, text="Remover", width=70, command=lambda name=user_name: self.remove_user(name))
+        remove_button.grid(row=0, column=2, padx=5)
+
     def create_widgets(self):
         user_frame = ctk.CTkFrame(self)
         user_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
@@ -119,7 +157,7 @@ class ManagerApp(ctk.CTk):
         self.user_entry.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
         add_user_button = ctk.CTkButton(user_frame, text="Adicionar Usuário", command=self.add_user)
         add_user_button.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
-        self.user_list_frame = ctk.CTkScrollableFrame(user_frame, label_text="Usuários do Sistema:")
+        self.user_list_frame = ctk.CTkScrollableFrame(user_frame, label_text="Usuários do Sistema")
         self.user_list_frame.grid(row=3, column=0, padx=10, pady=(0,10), sticky="nsew")
         user_frame.grid_rowconfigure(3, weight=1)
         topic_frame = ctk.CTkFrame(self)
@@ -151,28 +189,6 @@ class ManagerApp(ctk.CTk):
         self.log_textbox = ctk.CTkTextbox(log_frame, state="disabled", wrap="word")
         self.log_textbox.grid(row=1, column=0, padx=10, pady=(0,10), sticky="nsew")
 
-    def remove_user(self, user_name):
-        self.mqtt_client.publish(TOPIC_PRESENCE, f"{user_name}:OFFLINE", retain=True)
-        self.mqtt_client.publish(f"{TOPIC_USERS}/{user_name}", "", retain=True)
-        self.add_log(f"Comando para remover usuário '{user_name}' publicado.")
-
-    def update_user_list_display(self):
-        for widget in self.user_list_frame.winfo_children(): widget.destroy()
-        
-        for user_name in sorted(self.users):
-            status = self.user_status.get(user_name, "OFFLINE")
-            indicator = "🟢" if status == "ONLINE" else "⚪"
-            
-            item_frame = ctk.CTkFrame(self.user_list_frame)
-            item_frame.pack(fill="x", padx=5, pady=2)
-            item_frame.grid_columnconfigure(0, weight=1)
-            
-            label = ctk.CTkLabel(item_frame, text=f"{indicator} {user_name}", anchor="w")
-            label.grid(row=0, column=0, sticky="ew", padx=5)
-            
-            remove_button = ctk.CTkButton(item_frame, text="Remover", width=70, command=lambda name=user_name: self.remove_user(name))
-            remove_button.grid(row=0, column=1, padx=5)
-            
     def add_log(self, message):
         self.log_textbox.configure(state="normal")
         self.log_textbox.insert("end", message + "\n")
@@ -190,6 +206,11 @@ class ManagerApp(ctk.CTk):
         self.mqtt_client.publish(f"{TOPIC_USERS}/{user_name}", "ADD", retain=True)
         self.add_log(f"Comando para adicionar usuário '{user_name}' publicado.")
         self.user_entry.delete(0, "end")
+    
+    def remove_user(self, user_name):
+        self.mqtt_client.publish(TOPIC_PRESENCE, f"{user_name}:OFFLINE", retain=True)
+        self.mqtt_client.publish(f"{TOPIC_USERS}/{user_name}", "", retain=True)
+        self.add_log(f"Comando para remover usuário '{user_name}' publicado.")
 
     def add_topic(self):
         topic_name = self.topic_entry.get().strip()
