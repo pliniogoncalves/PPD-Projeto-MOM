@@ -2,14 +2,18 @@ import customtkinter as ctk
 from mqtt_client import MQTTClient
 import queue
 
-COLOR_ONLINE = "#1F6AA5" 
+UNIQUE_PREFIX = "ppd-plinio-final/"
+
+COLOR_ONLINE = "#1F6AA5"
 COLOR_OFFLINE = "#C21807"
 
-TOPIC_USERS = "sistema/gerenciamento/usuarios"
-TOPIC_TOPICS = "sistema/gerenciamento/topicos"
-TOPIC_PRESENCE = "sistema/presenca"
-TOPIC_USER_MSG_WILDCARD = "usuarios/+"
-TOPIC_ACK_WILDCARD = "sistema/ack/+"
+TOPIC_USERS = f"{UNIQUE_PREFIX}sistema/gerenciamento/usuarios"
+TOPIC_TOPICS = f"{UNIQUE_PREFIX}sistema/gerenciamento/topicos"
+TOPIC_PRESENCE = f"{UNIQUE_PREFIX}sistema/presenca"
+TOPIC_USER_MSG_BASE = f"{UNIQUE_PREFIX}usuarios"
+TOPIC_USER_MSG_WILDCARD = f"{TOPIC_USER_MSG_BASE}/+"
+TOPIC_ACK_BASE = f"{UNIQUE_PREFIX}sistema/ack"
+TOPIC_ACK_WILDCARD = f"{TOPIC_ACK_BASE}/+"
 
 
 class ManagerApp(ctk.CTk):
@@ -54,12 +58,27 @@ class ManagerApp(ctk.CTk):
         self.gui_queue.put(lambda: self.handle_message(message.topic, message.payload.decode()))
 
     def handle_message(self, topic, payload):
-        if topic.startswith("usuarios/"): self.handle_user_message(topic)
-        elif topic.startswith("sistema/ack/"): self.handle_ack_message(topic)
+        if topic.startswith(TOPIC_USER_MSG_BASE): self.handle_user_message(topic, payload)
+        elif topic.startswith(TOPIC_ACK_BASE): self.handle_ack_message(topic)
         elif topic.startswith(TOPIC_USERS): self.handle_user_sync(topic, payload)
         elif topic.startswith(TOPIC_TOPICS): self.handle_topic_sync(topic, payload)
         elif topic == TOPIC_PRESENCE: self.handle_presence_update(payload)
 
+    def handle_user_message(self, topic, payload):
+        if payload:
+            user_name = topic.split('/')[-1]
+            if user_name in self.message_counts:
+                self.message_counts[user_name] += 1
+                self.add_log(f"INFO: Mensagem enviada para {user_name}. Contador incrementado.")
+                self.update_counts_display()
+
+    def handle_ack_message(self, topic):
+        user_name = topic.split('/')[-1]
+        if user_name in self.message_counts and self.message_counts[user_name] > 0:
+            self.message_counts[user_name] -= 1
+            self.add_log(f"INFO: {user_name} confirmou recebimento. Contador decrementado.")
+            self.update_counts_display()
+    
     def handle_presence_update(self, payload):
         try:
             user_name, status = payload.split(":")
@@ -67,21 +86,7 @@ class ManagerApp(ctk.CTk):
             self.add_log(f"PRESENÇA: {user_name} está {status}")
             self.update_user_list_display()
         except ValueError: pass
-
-    def handle_user_message(self, topic):
-        user_name = topic.split('/')[1]
-        if user_name in self.message_counts:
-            self.message_counts[user_name] += 1
-            self.add_log(f"INFO: Mensagem enviada para {user_name}. Contador incrementado.")
-            self.update_counts_display()
-
-    def handle_ack_message(self, topic):
-        user_name = topic.split('/')[2]
-        if user_name in self.message_counts and self.message_counts[user_name] > 0:
-            self.message_counts[user_name] -= 1
-            self.add_log(f"INFO: {user_name} confirmou recebimento. Contador decrementado.")
-            self.update_counts_display()
-
+    
     def handle_user_sync(self, topic, payload):
         user_name = topic.split('/')[-1]
         if payload == "ADD":
@@ -111,42 +116,7 @@ class ManagerApp(ctk.CTk):
                 self.topics.remove(topic_name)
                 self.add_log(f"INFO: Tópico '{topic_name}' removido.")
                 self.update_topic_list_display()
-
-    def update_user_list_display(self):
-        for widget in self.user_list_frame.winfo_children(): widget.destroy()
-
-        online_users = [u for u in self.users if self.user_status.get(u) == "ONLINE"]
-        offline_users = [u for u in self.users if self.user_status.get(u) != "ONLINE"]
-
-        if online_users:
-            header = ctk.CTkLabel(self.user_list_frame, text=f"Online ({len(online_users)})", font=ctk.CTkFont(weight="bold"))
-            header.pack(anchor="w", padx=5, pady=(5, 2))
-            for user_name in sorted(online_users):
-                self.create_user_list_item(user_name, True)
-
-        if offline_users:
-            header = ctk.CTkLabel(self.user_list_frame, text=f"Offline ({len(offline_users)})", font=ctk.CTkFont(weight="bold"))
-            header.pack(anchor="w", padx=5, pady=(10, 2))
-            for user_name in sorted(offline_users):
-                self.create_user_list_item(user_name, False)
     
-    def create_user_list_item(self, user_name, is_online):
-        # --- MELHORIA: Item da lista com cor e botão ---
-        color = COLOR_ONLINE if is_online else COLOR_OFFLINE
-        
-        item_frame = ctk.CTkFrame(self.user_list_frame)
-        item_frame.pack(fill="x", padx=5, pady=2)
-        item_frame.grid_columnconfigure(1, weight=1)
-
-        dot_label = ctk.CTkLabel(item_frame, text="●", text_color=color, font=ctk.CTkFont(size=18))
-        dot_label.grid(row=0, column=0, sticky="w", padx=(5,2))
-        
-        name_label = ctk.CTkLabel(item_frame, text=user_name, anchor="w")
-        name_label.grid(row=0, column=1, sticky="ew")
-        
-        remove_button = ctk.CTkButton(item_frame, text="Remover", width=70, command=lambda name=user_name: self.remove_user(name))
-        remove_button.grid(row=0, column=2, padx=5)
-
     def create_widgets(self):
         user_frame = ctk.CTkFrame(self)
         user_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
@@ -231,6 +201,40 @@ class ManagerApp(ctk.CTk):
     def update_all_displays(self):
         self.update_user_list_display()
         self.update_counts_display()
+    
+    def update_user_list_display(self):
+        for widget in self.user_list_frame.winfo_children(): widget.destroy()
+
+        online_users = [u for u in self.users if self.user_status.get(u) == "ONLINE"]
+        offline_users = [u for u in self.users if self.user_status.get(u) != "ONLINE"]
+
+        if online_users:
+            header = ctk.CTkLabel(self.user_list_frame, text=f"Online ({len(online_users)})", font=ctk.CTkFont(weight="bold"))
+            header.pack(anchor="w", padx=5, pady=(5, 2))
+            for user_name in sorted(online_users):
+                self.create_user_list_item(user_name, True)
+
+        if offline_users:
+            header = ctk.CTkLabel(self.user_list_frame, text=f"Offline ({len(offline_users)})", font=ctk.CTkFont(weight="bold"))
+            header.pack(anchor="w", padx=5, pady=(10, 2))
+            for user_name in sorted(offline_users):
+                self.create_user_list_item(user_name, False)
+                
+    def create_user_list_item(self, user_name, is_online):
+        color = COLOR_ONLINE if is_online else COLOR_OFFLINE
+        
+        item_frame = ctk.CTkFrame(self.user_list_frame)
+        item_frame.pack(fill="x", padx=5, pady=2)
+        item_frame.grid_columnconfigure(1, weight=1)
+
+        dot_label = ctk.CTkLabel(item_frame, text="●", text_color=color, font=ctk.CTkFont(size=18))
+        dot_label.grid(row=0, column=0, sticky="w", padx=(5,2))
+        
+        name_label = ctk.CTkLabel(item_frame, text=user_name, anchor="w")
+        name_label.grid(row=0, column=1, sticky="ew")
+        
+        remove_button = ctk.CTkButton(item_frame, text="Remover", width=70, command=lambda name=user_name: self.remove_user(name))
+        remove_button.grid(row=0, column=2, padx=5)
 
     def update_topic_list_display(self):
         for widget in self.topic_list_frame.winfo_children():
