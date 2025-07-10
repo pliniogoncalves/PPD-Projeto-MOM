@@ -38,39 +38,57 @@ class ManagerApp(ctk.CTk):
         self.mqtt_client = MQTTClient(broker_address="broker.hivemq.com", on_message_callback=self.on_message)
         self.mqtt_client.connect()
         
-        # Inscrições de gerenciamento
         self.mqtt_client.subscribe(f"{TOPIC_USERS}/+")
         self.mqtt_client.subscribe(f"{TOPIC_TOPICS}/+")
         self.mqtt_client.subscribe(TOPIC_USER_MSG_WILDCARD)
         self.mqtt_client.subscribe(TOPIC_ACK_WILDCARD)
 
-        self.add_log("Cliente MQTT conectado e inscrito nos tópicos.")
+        self.add_log("Cliente MQTT Conectado e inscrito nos tópicos.")
 
     def on_message(self, client, userdata, message):
         """Callback para processar mensagens MQTT recebidas."""
         topic = message.topic
         payload = message.payload.decode()
         
-        # Lógica de roteamento de mensagens baseada no tópico
+        # --- LÓGICA DE SINCRONIZAÇÃO E CONTAGEM ---
+
+        # 1. Mensagem enviada para um usuário -> INCREMENTAR contador
         if topic.startswith("usuarios/"):
-            # Uma mensagem foi enviada para um usuário, INCREMENTAR contador
             user_name = topic.split('/')[1]
             if user_name in self.message_counts:
                 self.message_counts[user_name] += 1
                 self.add_log(f"INFO: Mensagem enviada para {user_name}. Contador incrementado.")
                 self.update_counts_display()
         
+        # 2. Usuário confirmou recebimento -> DECREMENTAR contador
         elif topic.startswith("sistema/ack/"):
-            # Um usuário confirmou o recebimento, DECREMENTAR contador
             user_name = topic.split('/')[2]
             if user_name in self.message_counts and self.message_counts[user_name] > 0:
                 self.message_counts[user_name] -= 1
                 self.add_log(f"INFO: {user_name} confirmou recebimento. Contador decrementado.")
                 self.update_counts_display()
-        
-        else:
-            # Outras mensagens de gerenciamento (deixado para futuras implementações)
-            self.add_log(f"Msg Gerencial | Tópico: {topic} | Payload: {payload}")
+
+        # 3. Sincronização de usuário existente do broker
+        elif topic.startswith(TOPIC_USERS):
+            if payload == "ADD":
+                user_name = topic.split('/')[-1]
+                if user_name not in self.users:
+                    self.users.append(user_name)
+                    # Garante que o contador seja inicializado se o usuário vier do broker
+                    if user_name not in self.message_counts:
+                        self.message_counts[user_name] = 0
+                    self.add_log(f"INFO: Usuário '{user_name}' sincronizado do broker.")
+                    self.update_user_list_display()
+                    self.update_counts_display()
+
+        # 4. Sincronização de tópico existente do broker
+        elif topic.startswith(TOPIC_TOPICS):
+            if payload == "ADD":
+                topic_name = topic.split('/')[-1]
+                if topic_name not in self.topics:
+                    self.topics.append(topic_name)
+                    self.add_log(f"INFO: Tópico '{topic_name}' sincronizado do broker.")
+                    self.update_topic_list_display()
 
     def create_widgets(self):
         # --- Frame de Gerenciamento de Usuários ---
@@ -148,12 +166,10 @@ class ManagerApp(ctk.CTk):
             self.add_log(f"ERRO: Usuário '{user_name}' já existe.")
             return
         
-        self.users.append(user_name)
-        self.message_counts[user_name] = 0
-        self.update_user_list_display()
-        self.update_counts_display()
+        # A lógica de adicionar à lista agora está centralizada no on_message
+        # para evitar duplicação, mas a publicação ainda é feita aqui.
         self.mqtt_client.publish(f"{TOPIC_USERS}/{user_name}", "ADD", retain=True)
-        self.add_log(f"Usuário '{user_name}' adicionado e notificação publicada.")
+        self.add_log(f"Comando para adicionar usuário '{user_name}' publicado.")
         self.user_entry.delete(0, "end")
 
     def add_topic(self):
@@ -165,10 +181,8 @@ class ManagerApp(ctk.CTk):
             self.add_log(f"ERRO: Tópico '{topic_name}' já existe.")
             return
             
-        self.topics.append(topic_name)
-        self.update_topic_list_display()
         self.mqtt_client.publish(f"{TOPIC_TOPICS}/{topic_name}", "ADD", retain=True)
-        self.add_log(f"Tópico '{topic_name}' adicionado e notificação publicada.")
+        self.add_log(f"Comando para adicionar tópico '{topic_name}' publicado.")
         self.topic_entry.delete(0, "end")
 
     def update_user_list_display(self):
