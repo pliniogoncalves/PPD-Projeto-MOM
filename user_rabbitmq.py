@@ -3,11 +3,12 @@ import tkinter as tk
 from tkinter import messagebox
 import os
 import threading
+import datetime
 from rabbitmq_client import RabbitMQClient
 
 TOPICOS_FILE = "topicos_rabbit.txt"
 USUARIOS_FILE = "usuarios_rabbit.txt"
-COLOR_ONLINE = "#1F6AA5"
+COLOR_SUBSCRIBED = ("#4A4A4A", "#555555")
 
 def ler_arquivo(arquivo):
     """Lê um arquivo de texto e retorna uma lista de suas linhas."""
@@ -24,6 +25,7 @@ class UserApp(ctk.CTk):
         
         self.user_name = None
         self.subscribed_topics = set()
+        self.consumer_threads = {}
 
         self.create_login_widgets()
 
@@ -105,15 +107,17 @@ class UserApp(ctk.CTk):
         for widget in self.topics_list_frame.winfo_children(): widget.destroy()
         all_topics = ler_arquivo(TOPICOS_FILE)
         for topic_name in sorted(all_topics):
-            btn_text = f"{topic_name} (Sair)" if topic_name in self.subscribed_topics else topic_name
-            btn_command = lambda t=topic_name: self.unsubscribe_from_topic(t) if t in self.subscribed_topics else self.subscribe_to_topic(t)
-            btn = ctk.CTkButton(self.topics_list_frame, text=btn_text, command=btn_command)
+            is_subscribed = topic_name in self.subscribed_topics
+            btn_text = f"{topic_name} (Sair)" if is_subscribed else topic_name
+            btn_color = COLOR_SUBSCRIBED if is_subscribed else ("#3B8ED0", "#1F6AA5")
+            btn_command = lambda t=topic_name, sub=is_subscribed: self.unsubscribe_from_topic(t) if sub else self.subscribe_to_topic(t)
+            btn = ctk.CTkButton(self.topics_list_frame, text=btn_text, command=btn_command, fg_color=btn_color)
             btn.pack(padx=10, pady=5, fill="x")
 
         for widget in self.users_list_frame.winfo_children(): widget.destroy()
         all_users = [u for u in ler_arquivo(USUARIOS_FILE) if u != self.user_name]
         for user_name in sorted(all_users):
-            label = ctk.CTkLabel(self.users_list_frame, text=user_name)
+            label = ctk.CTkLabel(self.users_list_frame, text=f"● {user_name}", text_color=("#1F6AA5", "#1F6AA5"))
             label.pack(padx=10, pady=5, anchor="w")
 
         subscribed_list = sorted(list(self.subscribed_topics))
@@ -129,8 +133,9 @@ class UserApp(ctk.CTk):
         self.after(0, self._add_log_thread_safe, message)
 
     def _add_log_thread_safe(self, message):
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_textbox.configure(state="normal")
-        self.log_textbox.insert("end", f"{message}\n")
+        self.log_textbox.insert("end", f"[{timestamp}] {message}\n")
         self.log_textbox.configure(state="disabled")
         self.log_textbox.see("end")
 
@@ -164,6 +169,7 @@ class UserApp(ctk.CTk):
         message = self.topic_msg_entry.get().strip()
         if not topic_name or not message: return
         self.client.publish_to_exchange(topic_name, f"({self.user_name}) {message}")
+        self.add_log(f"Você para ({topic_name}): {message}")
         self.topic_msg_entry.delete(0, ctk.END)
 
     def send_to_user(self):
@@ -171,7 +177,7 @@ class UserApp(ctk.CTk):
         message = self.user_msg_entry.get().strip()
         if not recipient or not message: return
         queue_name = f"queue_{recipient}"
-        self.client.publish_to_queue(queue_name, f"{self.user_name}: {message}")
+        self.client.publish_to_queue(queue_name, f"de {self.user_name}: {message}")
         self.add_log(f"Você para {recipient} (Privado): {message}")
         self.user_msg_entry.delete(0, ctk.END)
 
