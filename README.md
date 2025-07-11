@@ -37,20 +37,20 @@ Este projeto é dividido em dois componentes principais:
 
 ```bash
 # Clone o repositório (se ainda não o fez)
-git clone [https://github.com/pliniogoncalves/PPD-Projeto-MOM.git](https://github.com/pliniogoncalves/PPD-Projeto-MOM.git)
+git clone (https://github.com/pliniogoncalves/PPD-Projeto-MOM.git)
 cd seu-repositorio
 
 # Certifique-se de estar na branch correta
 git checkout versao-rabbitmq
 
 # Instale as dependências
-pip install -r requirements.txt
+py -m pip install -r requirements.txt
 
 ```
 
 ### 3. Inicie o Servidor RabbitMQ
 
-Antes de executar os scripts Python, garanta que o seu servidor RabbitMQ local esteja no ar. Geralmente, isso é feito através do menu Iniciar ou executando rabbitmq-server no terminal apropriado.
+Antes de executar os scripts Python, garanta que o seu servidor RabbitMQ local esteja no ar. Geralmente, isso é feito através do menu Iniciar ou executando rabbitmq-server no terminal apropriado com ```rabbitmq-service start```.
 
 ### 4. Execute as Aplicações
 Abra dois ou mais terminais na pasta do projeto.
