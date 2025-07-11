@@ -11,7 +11,6 @@ USUARIOS_FILE = "usuarios_rabbit.txt"
 COLOR_SUBSCRIBED = ("#4A4A4A", "#555555")
 
 def ler_arquivo(arquivo):
-    """Lê um arquivo de texto e retorna uma lista de suas linhas."""
     if not os.path.exists(arquivo): return []
     with open(arquivo, "r") as f:
         return [linha.strip() for linha in f if linha.strip()]
@@ -25,7 +24,6 @@ class UserApp(ctk.CTk):
         
         self.user_name = None
         self.subscribed_topics = set()
-        self.consumer_threads = {}
 
         self.create_login_widgets()
 
@@ -59,6 +57,7 @@ class UserApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         self.start_consuming_direct_messages()
+        self.update_lists()
 
     def setup_main_ui(self):
         self.grid_columnconfigure(0, weight=1); self.grid_columnconfigure(1, weight=2)
@@ -76,9 +75,6 @@ class UserApp(ctk.CTk):
         users_label.grid(row=2, column=0, padx=10, pady=10)
         self.users_list_frame = ctk.CTkScrollableFrame(left_frame)
         self.users_list_frame.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
-        
-        update_button = ctk.CTkButton(left_frame, text="Atualizar Listas", command=self.update_lists)
-        update_button.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
         
         right_frame = ctk.CTkFrame(self)
         right_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
@@ -100,8 +96,6 @@ class UserApp(ctk.CTk):
         self.user_msg_entry.grid(row=2, column=1, sticky="ew", padx=10, pady=5)
         send_user_button = ctk.CTkButton(right_frame, text="Enviar para Usuário", command=self.send_to_user)
         send_user_button.grid(row=3, column=1, sticky="ew", padx=10, pady=10)
-        
-        self.update_lists()
 
     def update_lists(self):
         for widget in self.topics_list_frame.winfo_children(): widget.destroy()
@@ -122,12 +116,14 @@ class UserApp(ctk.CTk):
 
         subscribed_list = sorted(list(self.subscribed_topics))
         self.topic_combobox.configure(values=subscribed_list)
-        if subscribed_list: self.topic_combobox.set(subscribed_list[0])
-        else: self.topic_combobox.set("")
+        if self.topic_combobox.get() not in subscribed_list:
+            self.topic_combobox.set(subscribed_list[0] if subscribed_list else "")
 
         self.user_combobox.configure(values=all_users)
-        if all_users: self.user_combobox.set(all_users[0])
-        else: self.user_combobox.set("")
+        if self.user_combobox.get() not in all_users:
+            self.user_combobox.set(all_users[0] if all_users else "")
+            
+        self.after(5000, self.update_lists)
 
     def add_log(self, message):
         self.after(0, self._add_log_thread_safe, message)

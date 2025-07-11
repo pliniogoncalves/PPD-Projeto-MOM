@@ -37,6 +37,7 @@ class AdminApp(ctk.CTk):
         
         self.create_widgets()
         self.update_all_lists()
+        self.check_all_queues()
 
     def create_widgets(self):
         user_frame = ctk.CTkFrame(self)
@@ -64,7 +65,7 @@ class AdminApp(ctk.CTk):
         self.topic_list_frame = ctk.CTkScrollableFrame(topic_frame, label_text="Tópicos Oficiais")
         self.topic_list_frame.grid(row=3, column=0, padx=10, pady=(0,10), sticky="nsew")
         topic_frame.grid_rowconfigure(3, weight=1)
-
+        
         counts_frame = ctk.CTkFrame(self)
         counts_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
         counts_frame.grid_columnconfigure(0, weight=1); counts_frame.grid_rowconfigure(1, weight=1)
@@ -72,8 +73,6 @@ class AdminApp(ctk.CTk):
         counts_label.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.counts_display_frame = ctk.CTkScrollableFrame(counts_frame)
         self.counts_display_frame.grid(row=1, column=0, padx=10, pady=(0,10), sticky="nsew")
-        check_button = ctk.CTkButton(counts_frame, text="Verificar Agora", command=self.check_all_queues)
-        check_button.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
 
         log_frame = ctk.CTkFrame(self)
         log_frame.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
@@ -92,12 +91,9 @@ class AdminApp(ctk.CTk):
     def add_user(self):
         user_name = self.user_entry.get().strip()
         if not user_name: return
-        
-        usuarios_existentes = ler_arquivo(USUARIOS_FILE)
-        if user_name in usuarios_existentes:
+        if user_name in ler_arquivo(USUARIOS_FILE):
             self.add_log(f"ERRO: Usuário '{user_name}' já existe.")
             return
-        
         try:
             queue_name = f"queue_{user_name}"
             self.client.declare_queue(queue_name)
@@ -121,11 +117,9 @@ class AdminApp(ctk.CTk):
     def add_topic(self):
         topic_name = self.topic_entry.get().strip()
         if not topic_name: return
-
         if topic_name in ler_arquivo(TOPICOS_FILE):
             self.add_log(f"ERRO: Tópico '{topic_name}' já existe.")
             return
-            
         try:
             self.client.declare_exchange(topic_name, 'fanout')
             salvar_em_arquivo(TOPICOS_FILE, topic_name)
@@ -147,7 +141,6 @@ class AdminApp(ctk.CTk):
     def update_all_lists(self):
         self.update_user_list()
         self.update_topic_list()
-        self.check_all_queues()
 
     def update_user_list(self):
         for widget in self.user_list_frame.winfo_children(): widget.destroy()
@@ -172,7 +165,6 @@ class AdminApp(ctk.CTk):
             button.grid(row=0, column=1, padx=5)
             
     def check_all_queues(self):
-        self.add_log("Verificando contagem de mensagens...")
         for widget in self.counts_display_frame.winfo_children(): widget.destroy()
         
         for user in ler_arquivo(USUARIOS_FILE):
@@ -181,7 +173,8 @@ class AdminApp(ctk.CTk):
             label_text = f"Fila '{queue_name}': {count} mensagens"
             label = ctk.CTkLabel(self.counts_display_frame, text=label_text)
             label.pack(anchor="w", padx=10)
-        self.add_log("Verificação concluída.")
+        
+        self.after(3000, self.check_all_queues)
         
     def on_closing(self):
         self.client.close()
