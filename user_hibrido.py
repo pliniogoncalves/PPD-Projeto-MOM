@@ -40,21 +40,26 @@ class UserHibridoApp(ctk.CTk):
         self.create_login_widgets()
 
     def update_users_list_display(self):
-        for widget in self.users_list_frame.winfo_children(): widget.destroy()
+        """Função central e corrigida para desenhar a lista de usuários."""
+        for widget in self.users_list_frame.winfo_children():
+            widget.destroy()
         
-        all_users = list(self.users)
+        all_users = sorted(list(self.users))
+        
         online_users = [u for u in all_users if self.user_status.get(u) == "ONLINE"]
         offline_users = [u for u in all_users if self.user_status.get(u) != "ONLINE"]
 
         if online_users:
             header = ctk.CTkLabel(self.users_list_frame, text=f"Online ({len(online_users)})", font=ctk.CTkFont(weight="bold"))
             header.pack(anchor="w", padx=5, pady=(5, 2))
-            for user_name in sorted(online_users): self.create_user_list_item(user_name, True)
+            for user_name in online_users:
+                self.create_user_list_item(user_name, True)
         
         if offline_users:
             header = ctk.CTkLabel(self.users_list_frame, text=f"Offline ({len(offline_users)})", font=ctk.CTkFont(weight="bold"))
             header.pack(anchor="w", padx=5, pady=(10, 2))
-            for user_name in sorted(offline_users): self.create_user_list_item(user_name, False)
+            for user_name in offline_users:
+                self.create_user_list_item(user_name, False)
 
     def create_login_widgets(self):
         self.grid_rowconfigure(0, weight=1)
@@ -280,27 +285,10 @@ class UserHibridoApp(ctk.CTk):
             btn = ctk.CTkButton(self.topics_list_frame, text=btn_text, command=btn_command, fg_color=btn_fg_color)
             btn.pack(padx=10, pady=5, fill="x")
 
-    def update_users_list_display(self):
-        for widget in self.users_list_frame.winfo_children(): widget.destroy()
-        
-        all_users = list(self.users)
-        online_users = [u for u in all_users if self.user_status.get(u) == "ONLINE"]
-        offline_users = [u for u in all_users if self.user_status.get(u) != "ONLINE"]
-
-        if online_users:
-            header = ctk.CTkLabel(self.users_list_frame, text=f"Online ({len(online_users)})", font=ctk.CTkFont(weight="bold"))
-            header.pack(anchor="w", padx=5, pady=(5, 2))
-            for user_name in sorted(online_users): self.create_user_list_item(user_name, True)
-        
-        if offline_users:
-            header = ctk.CTkLabel(self.users_list_frame, text=f"Offline ({len(offline_users)})", font=ctk.CTkFont(weight="bold"))
-            header.pack(anchor="w", padx=5, pady=(10, 2))
-            for user_name in sorted(offline_users): self.create_user_list_item(user_name, False)
-                
     def create_user_list_item(self, user_name, is_online):
         color = COLOR_ONLINE if is_online else COLOR_OFFLINE
-        item_frame = ctk.CTkFrame(self, fg_color="transparent")
-        item_frame.pack(in_=self.users_list_frame, fill="x", padx=5)
+        item_frame = ctk.CTkFrame(self.users_list_frame, fg_color="transparent")
+        item_frame.pack(fill="x", padx=5)
         dot_label = ctk.CTkLabel(item_frame, text="●", text_color=color, font=ctk.CTkFont(size=18))
         dot_label.pack(side="left", padx=(5,2))
         name_label = ctk.CTkLabel(item_frame, text=user_name, anchor="w")
