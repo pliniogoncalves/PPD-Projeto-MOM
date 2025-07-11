@@ -60,3 +60,7 @@ venv.bak/
 # IDE settings
 .idea/
 .vscode/
+
+# Arquivos de estado da aplicação RabbitMQ
+usuarios_rabbit.txt
+topicos_rabbit.txt

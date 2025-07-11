@@ -1,13 +1,32 @@
 import customtkinter as ctk
 from tkinter import messagebox
+import os
 from rabbitmq_client import RabbitMQClient
+
+TOPICOS_FILE = "topicos_rabbit.txt"
+USUARIOS_FILE = "usuarios_rabbit.txt"
+
+def ler_arquivo(arquivo):
+    if not os.path.exists(arquivo): return []
+    with open(arquivo, "r") as f:
+        return [linha.strip() for linha in f if linha.strip()]
+
+def salvar_em_arquivo(arquivo, nome):
+    with open(arquivo, "a") as f:
+        f.write(nome + "\n")
+
+def remover_de_arquivo(arquivo, nome_para_remover):
+    linhas = ler_arquivo(arquivo)
+    with open(arquivo, "w") as f:
+        for linha in linhas:
+            if linha != nome_para_remover:
+                f.write(linha + "\n")
 
 class AdminApp(ctk.CTk):
     def __init__(self, client):
         super().__init__()
         self.client = client
 
-        # --- Configuração da Janela Principal ---
         self.title("Gerenciador MOM (RabbitMQ)")
         self.geometry("800x600")
 
@@ -15,15 +34,11 @@ class AdminApp(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
-
-        # --- Listas em memória para a sessão atual ---
-        self.users = []
-        self.topics = []
         
         self.create_widgets()
+        self.update_all_lists()
 
     def create_widgets(self):
-        # --- Frame de Gerenciamento de Usuários ---
         user_frame = ctk.CTkFrame(self)
         user_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
         user_frame.grid_columnconfigure(0, weight=1)
@@ -33,11 +48,10 @@ class AdminApp(ctk.CTk):
         self.user_entry.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
         add_user_button = ctk.CTkButton(user_frame, text="Adicionar Usuário", command=self.add_user)
         add_user_button.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
-        self.user_list_frame = ctk.CTkScrollableFrame(user_frame, label_text="Usuários (Sessão Atual)")
+        self.user_list_frame = ctk.CTkScrollableFrame(user_frame, label_text="Usuários Cadastrados")
         self.user_list_frame.grid(row=3, column=0, padx=10, pady=(0,10), sticky="nsew")
         user_frame.grid_rowconfigure(3, weight=1)
 
-        # --- Frame de Gerenciamento de Tópicos ---
         topic_frame = ctk.CTkFrame(self)
         topic_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
         topic_frame.grid_columnconfigure(0, weight=1)
@@ -47,11 +61,10 @@ class AdminApp(ctk.CTk):
         self.topic_entry.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="ew")
         add_topic_button = ctk.CTkButton(topic_frame, text="Adicionar Tópico", command=self.add_topic)
         add_topic_button.grid(row=2, column=0, padx=10, pady=(0, 10), sticky="ew")
-        self.topic_list_frame = ctk.CTkScrollableFrame(topic_frame, label_text="Tópicos (Sessão Atual)")
+        self.topic_list_frame = ctk.CTkScrollableFrame(topic_frame, label_text="Tópicos Oficiais")
         self.topic_list_frame.grid(row=3, column=0, padx=10, pady=(0,10), sticky="nsew")
         topic_frame.grid_rowconfigure(3, weight=1)
 
-        # --- Frame de Mensagens Pendentes ---
         counts_frame = ctk.CTkFrame(self)
         counts_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
         counts_frame.grid_columnconfigure(0, weight=1); counts_frame.grid_rowconfigure(1, weight=1)
@@ -62,7 +75,6 @@ class AdminApp(ctk.CTk):
         check_button = ctk.CTkButton(counts_frame, text="Verificar Agora", command=self.check_all_queues)
         check_button.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
 
-        # --- Frame de Log de Eventos ---
         log_frame = ctk.CTkFrame(self)
         log_frame.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
         log_frame.grid_columnconfigure(0, weight=1); log_frame.grid_rowconfigure(1, weight=1)
@@ -80,16 +92,19 @@ class AdminApp(ctk.CTk):
     def add_user(self):
         user_name = self.user_entry.get().strip()
         if not user_name: return
-        if user_name in self.users:
-            self.add_log(f"ERRO: Usuário '{user_name}' já adicionado nesta sessão.")
+        
+        usuarios_existentes = ler_arquivo(USUARIOS_FILE)
+        if user_name in usuarios_existentes:
+            self.add_log(f"ERRO: Usuário '{user_name}' já existe.")
             return
+        
         try:
             queue_name = f"queue_{user_name}"
             self.client.declare_queue(queue_name)
-            self.users.append(user_name)
-            self.update_user_list()
+            salvar_em_arquivo(USUARIOS_FILE, user_name)
+            self.update_all_lists()
             self.user_entry.delete(0, ctk.END)
-            self.add_log(f"Usuário '{user_name}' e fila '{queue_name}' criados no broker.")
+            self.add_log(f"Usuário '{user_name}' e fila '{queue_name}' criados.")
         except Exception as e:
             self.add_log(f"ERRO ao criar usuário: {e}")
 
@@ -97,40 +112,46 @@ class AdminApp(ctk.CTk):
         try:
             queue_name = f"queue_{user_name}"
             self.client.delete_queue(queue_name)
-            self.users.remove(user_name)
-            self.update_user_list()
-            self.check_all_queues() # Atualiza a lista de contagem
-            self.add_log(f"Usuário '{user_name}' e fila removidos do broker.")
+            remover_de_arquivo(USUARIOS_FILE, user_name)
+            self.update_all_lists()
+            self.add_log(f"Usuário '{user_name}' e fila removidos.")
         except Exception as e:
             self.add_log(f"ERRO ao remover usuário: {e}")
 
     def add_topic(self):
         topic_name = self.topic_entry.get().strip()
         if not topic_name: return
-        if topic_name in self.topics:
-            self.add_log(f"ERRO: Tópico '{topic_name}' já adicionado nesta sessão.")
+
+        if topic_name in ler_arquivo(TOPICOS_FILE):
+            self.add_log(f"ERRO: Tópico '{topic_name}' já existe.")
             return
+            
         try:
             self.client.declare_exchange(topic_name, 'fanout')
-            self.topics.append(topic_name)
-            self.update_topic_list()
+            salvar_em_arquivo(TOPICOS_FILE, topic_name)
+            self.update_all_lists()
             self.topic_entry.delete(0, ctk.END)
-            self.add_log(f"Tópico (exchange) '{topic_name}' criado no broker.")
+            self.add_log(f"Tópico (exchange) '{topic_name}' criado.")
         except Exception as e:
             self.add_log(f"ERRO ao criar tópico: {e}")
 
     def remove_topic(self, topic_name):
         try:
             self.client.delete_exchange(topic_name)
-            self.topics.remove(topic_name)
-            self.update_topic_list()
-            self.add_log(f"Tópico '{topic_name}' removido do broker.")
+            remover_de_arquivo(TOPICOS_FILE, topic_name)
+            self.update_all_lists()
+            self.add_log(f"Tópico '{topic_name}' removido.")
         except Exception as e:
             self.add_log(f"ERRO ao remover tópico: {e}")
 
+    def update_all_lists(self):
+        self.update_user_list()
+        self.update_topic_list()
+        self.check_all_queues()
+
     def update_user_list(self):
         for widget in self.user_list_frame.winfo_children(): widget.destroy()
-        for user_name in self.users:
+        for user_name in ler_arquivo(USUARIOS_FILE):
             frame = ctk.CTkFrame(self.user_list_frame)
             frame.pack(fill="x", padx=5, pady=2)
             frame.grid_columnconfigure(0, weight=1)
@@ -141,7 +162,7 @@ class AdminApp(ctk.CTk):
 
     def update_topic_list(self):
         for widget in self.topic_list_frame.winfo_children(): widget.destroy()
-        for topic_name in self.topics:
+        for topic_name in ler_arquivo(TOPICOS_FILE):
             frame = ctk.CTkFrame(self.topic_list_frame)
             frame.pack(fill="x", padx=5, pady=2)
             frame.grid_columnconfigure(0, weight=1)
@@ -154,8 +175,7 @@ class AdminApp(ctk.CTk):
         self.add_log("Verificando contagem de mensagens...")
         for widget in self.counts_display_frame.winfo_children(): widget.destroy()
         
-        # Verifica as filas dos usuários criados nesta sessão
-        for user in self.users:
+        for user in ler_arquivo(USUARIOS_FILE):
             queue_name = f"queue_{user}"
             count = self.client.get_message_count(queue_name)
             label_text = f"Fila '{queue_name}': {count} mensagens"
@@ -174,7 +194,6 @@ if __name__ == "__main__":
         app.protocol("WM_DELETE_WINDOW", app.on_closing)
         app.mainloop()
     except Exception as e:
-        # Fallback para exibir erro se a conexão inicial falhar
         root = ctk.CTk()
         root.withdraw()
-        messagebox.showerror("Erro Crítico de Conexão", f"Não foi possível conectar ao RabbitMQ.\nVerifique se o servidor está rodando.\n\nDetalhes: {e}", parent=root)
+        messagebox.showerror("Erro Crítico de Conexão", f"Não foi possível conectar ao RabbitMQ.\nVerifique se o servidor está rodando.\n\nDetalhes: {e}")
