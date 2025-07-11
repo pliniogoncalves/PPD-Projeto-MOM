@@ -37,7 +37,7 @@ Este projeto é dividido em dois componentes principais:
 
 ```bash
 # Clone o repositório (se ainda não o fez)
-git clone [https://github.com/seu-usuario/seu-repositorio.git](https://github.com/seu-usuario/seu-repositorio.git)
+git clone [https://github.com/pliniogoncalves/PPD-Projeto-MOM.git](https://github.com/pliniogoncalves/PPD-Projeto-MOM.git)
 cd seu-repositorio
 
 # Certifique-se de estar na branch correta
