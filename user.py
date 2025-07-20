@@ -20,8 +20,7 @@ TOPIC_USER_MSG_BASE = f"{UNIQUE_PREFIX}usuarios"
 TOPIC_ACK_BASE = f"{UNIQUE_PREFIX}sistema/ack"
 TOPIC_AUTH_REQUEST = f"{UNIQUE_PREFIX}sistema/auth/request"
 TOPIC_AUTH_RESPONSE_BASE = f"{UNIQUE_PREFIX}sistema/auth/response"
-TOPIC_SUB_REQUEST = f"{UNIQUE_PREFIX}sistema/subscriptions/request"
-TOPIC_SUB_RESPONSE = f"{UNIQUE_PREFIX}sistema/subscriptions/response"
+TOPIC_USER_SUBS_STATE_BASE = f"{UNIQUE_PREFIX}state/subscriptions"
 
 
 class UserApp(ctk.CTk):
@@ -37,8 +36,12 @@ class UserApp(ctk.CTk):
         self.active_subscriptions = set()
         self.user_status = {}
         self.gui_queue = queue.Queue()
+        self.state_topic = None
+        self.state_restored = False
+        self.message_buffer = []
+        
         self.create_login_widgets()
-    
+
     def create_login_widgets(self):
         self.login_frame = ctk.CTkFrame(self)
         self.login_frame.pack(padx=20, pady=20, fill="both", expand=True)
@@ -84,7 +87,7 @@ class UserApp(ctk.CTk):
         else:
             self.status_label.configure(text="Usuário inválido ou não cadastrado.", text_color=COLOR_OFFLINE)
             self.login_button.configure(state="normal", text="Entrar")
-            
+
     def proceed_with_main_login(self):
         self.login_frame.destroy()
         self.geometry("900x700")
@@ -103,20 +106,17 @@ class UserApp(ctk.CTk):
         
         if self.mqtt_client.connect():
             self.personal_topic = f"{TOPIC_USER_MSG_BASE}/{self.user_name}"
-            self.response_topic = f"{TOPIC_SUB_RESPONSE}/{self.user_name}"
-            self.request_topic = f"{TOPIC_SUB_REQUEST}/{self.user_name}"
+            self.state_topic = f"{TOPIC_USER_SUBS_STATE_BASE}/{self.user_name}"
             
             self.mqtt_client.subscribe(self.personal_topic, qos=1)
-            self.mqtt_client.subscribe(self.response_topic, qos=1)
             self.mqtt_client.subscribe(TOPIC_MGMT_USERS_WILDCARD, qos=1)
             self.mqtt_client.subscribe(TOPIC_MGMT_TOPICS_WILDCARD, qos=1)
             self.mqtt_client.subscribe(TOPIC_PRESENCE, qos=0)
-            self.mqtt_client.subscribe(TOPIC_PRESENCE_REQUEST, qos=0)
+            
+            self.mqtt_client.subscribe(self.state_topic, qos=1)
+            self.add_log("Sincronizando estado de inscrições...")
             
             self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:ONLINE", retain=True)
-            self.request_presence_status()
-            self.mqtt_client.publish(self.request_topic, "get", qos=1)
-            self.add_log("Solicitando estado de inscrições ao gerenciador...")
             self.add_log(f"Conectado como '{self.user_name}'. Sessão persistente ativada.")
             self.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.process_gui_queue()
@@ -135,34 +135,8 @@ class UserApp(ctk.CTk):
 
     def on_message(self, client, userdata, message):
         self.gui_queue.put(lambda: self.handle_message(message.topic, message.payload.decode()))
-
-    def handle_message(self, topic, payload):
-        if topic == self.response_topic:
-            try:
-                subs = json.loads(payload)
-                self.active_subscriptions = set(subs)
-                self.add_log(f"Estado de inscrições sincronizado. {len(subs)} tópico(s) ativo(s).")
-                self.update_topics_list_display()
-                self.update_send_selectors()
-            except json.JSONDecodeError:
-                self.add_log("Erro ao decodificar a resposta de estado do gerenciador.")
-            return
-
-        if topic == self.personal_topic:
-            if payload:
-                self.add_log(f"(Privado) de {payload}")
-                self.mqtt_client.publish(f"{TOPIC_ACK_BASE}/{self.user_name}", "ACK", qos=0)
-            return
-
-        if topic == TOPIC_PRESENCE:
-            self.handle_presence_update(payload)
-            return
-
-        if topic == TOPIC_PRESENCE_REQUEST:
-            if self.mqtt_client:
-                self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:ONLINE", qos=0, retain=False)
-            return
-            
+        
+    def _process_message(self, topic, payload):
         if topic.startswith(TOPIC_MGMT_USERS):
             user = topic.split('/')[-1]
             if not payload:
@@ -173,7 +147,7 @@ class UserApp(ctk.CTk):
             self.update_users_list_display()
             self.update_send_selectors()
             return
-            
+
         if topic.startswith(TOPIC_MGMT_TOPICS):
             topic_name = topic.split('/')[-1]
             if not payload:
@@ -184,12 +158,51 @@ class UserApp(ctk.CTk):
             self.update_topics_list_display()
             self.update_send_selectors()
             return
+            
+        if topic == TOPIC_PRESENCE:
+            self.handle_presence_update(payload)
+            return
+
+        if topic == self.personal_topic:
+            if payload:
+                self.add_log(f"(Privado) de {payload}")
+                self.mqtt_client.publish(f"{TOPIC_ACK_BASE}/{self.user_name}", "ACK", qos=0)
+            return
 
         if any(topic.endswith(sub) for sub in self.active_subscriptions):
              if not payload.startswith(f"{self.user_name}:"):
                 topic_name_only = topic.split('/')[-1]
                 self.add_log(f"({topic_name_only}) | {payload}")
+             return
 
+    def handle_message(self, topic, payload):
+        if topic == self.state_topic:
+            if not payload: return
+            try:
+                subs = json.loads(payload)
+                self.active_subscriptions = set(subs)
+                for sub_topic in self.active_subscriptions:
+                    full_topic_path = f"{UNIQUE_PREFIX}{sub_topic}"
+                    self.mqtt_client.subscribe(full_topic_path, qos=1)
+                self.add_log(f"Estado de inscrições restaurado: {len(subs)} tópico(s) ativo(s).")
+                self.update_topics_list_display()
+                self.update_send_selectors()
+                
+                self.state_restored = True
+                self.add_log("Processando mensagens recebidas durante a sincronização...")
+                for buffered_topic, buffered_payload in self.message_buffer:
+                    self._process_message(buffered_topic, buffered_payload)
+                self.message_buffer.clear()
+                
+            except json.JSONDecodeError:
+                self.add_log("Erro ao decodificar o estado de inscrições.")
+            return
+
+        if self.state_restored:
+            self._process_message(topic, payload)
+        else:
+            self.message_buffer.append((topic, payload))
+    
     def handle_presence_update(self, payload):
         try:
             user_name, status = payload.split(":")
@@ -197,10 +210,6 @@ class UserApp(ctk.CTk):
                 self.user_status[user_name] = status
                 self.update_users_list_display()
         except ValueError: pass
-
-    def request_presence_status(self):
-        self.mqtt_client.publish(TOPIC_PRESENCE_REQUEST, "who_is_online", qos=0)
-        self.add_log("Sincronizando status de presença...")
 
     def setup_main_ui(self):
         self.grid_columnconfigure(0, weight=1); self.grid_columnconfigure(1, weight=2)
@@ -257,7 +266,7 @@ class UserApp(ctk.CTk):
         self.mqtt_client.publish(recipient_topic, payload, qos=1, retain=False)
         self.add_log(f"Você para (Privado) {recipient}: {message}")
         self.user_msg_entry.delete(0, "end")
-        
+
     def update_send_selectors(self):
         subscribed_topics = sorted(list(self.active_subscriptions))
         if subscribed_topics:
@@ -282,16 +291,18 @@ class UserApp(ctk.CTk):
         else:
             self.user_combobox.configure(values=["Nenhum outro usuário"])
             self.user_combobox.set("Nenhum outro usuário")
-            
+
+    def _update_and_publish_subscriptions(self):
+        if self.mqtt_client and self.state_topic:
+            payload = json.dumps(list(self.active_subscriptions))
+            self.mqtt_client.publish(self.state_topic, payload, qos=1, retain=True)
+
     def subscribe_to_topic(self, topic_name):
         full_topic_path = f"{UNIQUE_PREFIX}{topic_name}"
         self.mqtt_client.subscribe(full_topic_path, qos=1)
         self.active_subscriptions.add(topic_name)
         self.add_log(f"Inscrito no tópico: {topic_name}")
-
-        payload = json.dumps({"action": "subscribe", "topic": topic_name})
-        self.mqtt_client.publish(self.request_topic, payload, qos=1)
-
+        self._update_and_publish_subscriptions()
         self.update_topics_list_display()
         self.update_send_selectors()
 
@@ -300,13 +311,10 @@ class UserApp(ctk.CTk):
         self.mqtt_client.unsubscribe(full_topic_path)
         self.active_subscriptions.discard(topic_name)
         self.add_log(f"Inscrição cancelada para: {topic_name}")
-
-        payload = json.dumps({"action": "unsubscribe", "topic": topic_name})
-        self.mqtt_client.publish(self.request_topic, payload, qos=1)
-
+        self._update_and_publish_subscriptions()
         self.update_topics_list_display()
         self.update_send_selectors()
-        
+
     def update_topics_list_display(self):
         for widget in self.topics_list_frame.winfo_children(): widget.destroy()
         
@@ -332,7 +340,7 @@ class UserApp(ctk.CTk):
             header.pack(anchor="w", padx=5, pady=(10, 2))
             for user_name in sorted(offline_users):
                 self.create_user_list_item(user_name, False)
-                
+
     def create_user_list_item(self, user_name, is_online):
         color = COLOR_ONLINE if is_online else COLOR_OFFLINE
         item_frame = ctk.CTkFrame(self.users_list_frame, fg_color="transparent")

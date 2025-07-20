@@ -17,8 +17,6 @@ TOPIC_USER_MSG_WILDCARD = f"{TOPIC_USER_MSG_BASE}/+"
 TOPIC_ACK_BASE = f"{UNIQUE_PREFIX}sistema/ack"
 TOPIC_ACK_WILDCARD = f"{TOPIC_ACK_BASE}/+"
 TOPIC_AUTH_REQUEST = f"{UNIQUE_PREFIX}sistema/auth/request"
-TOPIC_SUB_REQUEST = f"{UNIQUE_PREFIX}sistema/subscriptions/request"
-TOPIC_SUB_RESPONSE = f"{UNIQUE_PREFIX}sistema/subscriptions/response"
 
 
 class ManagerApp(ctk.CTk):
@@ -33,7 +31,6 @@ class ManagerApp(ctk.CTk):
         self.topics = []
         self.message_counts = {}
         self.user_status = {}
-        self.topic_subscriptions = {}
         self.create_widgets()
         self.gui_queue = queue.Queue()
         self.mqtt_client = MQTTClient(broker_address="broker.hivemq.com", on_message_callback=self.on_message)
@@ -44,7 +41,6 @@ class ManagerApp(ctk.CTk):
             self.mqtt_client.subscribe(TOPIC_ACK_WILDCARD, qos=0)
             self.mqtt_client.subscribe(TOPIC_PRESENCE, qos=1)
             self.mqtt_client.subscribe(TOPIC_AUTH_REQUEST, qos=0)
-            self.mqtt_client.subscribe(f"{TOPIC_SUB_REQUEST}/+", qos=0)
             self.add_log("Cliente MQTT conectado e inscrito nos tópicos.")
         else:
             self.add_log("FALHA AO CONECTAR AO BROKER.")
@@ -63,45 +59,12 @@ class ManagerApp(ctk.CTk):
         self.gui_queue.put(lambda: self.handle_message(message.topic, message.payload.decode()))
         
     def handle_message(self, topic, payload):
-        if topic.startswith(TOPIC_SUB_REQUEST):
-            self.handle_subscription_request(topic, payload)
-        elif topic.startswith(TOPIC_USER_MSG_BASE): self.handle_user_message(topic, payload)
+        if topic.startswith(TOPIC_USER_MSG_BASE): self.handle_user_message(topic, payload)
         elif topic.startswith(TOPIC_ACK_BASE): self.handle_ack_message(topic)
         elif topic.startswith(TOPIC_MGMT_USERS): self.handle_user_sync(topic, payload)
         elif topic.startswith(TOPIC_MGMT_TOPICS): self.handle_topic_sync(topic, payload)
         elif topic == TOPIC_PRESENCE: self.handle_presence_update(payload)
         elif topic == TOPIC_AUTH_REQUEST: self.handle_auth_request(payload)
-
-    def handle_subscription_request(self, topic, payload):
-        user_name = topic.split('/')[-1]
-
-        if payload == "get":
-            self.add_log(f"STATE: Usuário '{user_name}' pediu seu estado de inscrições.")
-            user_subs = list(self.topic_subscriptions.get(user_name, []))
-            response_topic = f"{TOPIC_SUB_RESPONSE}/{user_name}"
-            self.mqtt_client.publish(response_topic, json.dumps(user_subs), qos=1)
-            self.add_log(f"STATE: Resposta enviada para '{user_name}' com {len(user_subs)} inscrições.")
-            return
-
-        try:
-            data = json.loads(payload)
-            action = data.get("action")
-            topic_name = data.get("topic")
-
-            if action == "subscribe":
-                self.topic_subscriptions.setdefault(user_name, set())
-                self.topic_subscriptions[user_name].add(topic_name)
-                self.add_log(f"STATE: Usuário '{user_name}' inscreveu-se no tópico '{topic_name}'.")
-
-            elif action == "unsubscribe":
-                if user_name in self.topic_subscriptions:
-                    self.topic_subscriptions[user_name].discard(topic_name)
-                    self.add_log(f"STATE: Usuário '{user_name}' cancelou inscrição no tópico '{topic_name}'.")
-            
-            print(f"Estado atual das inscrições: {self.topic_subscriptions}")
-
-        except json.JSONDecodeError:
-            self.add_log(f"STATE: Recebida mensagem mal formatada no tópico de inscrição: {payload}")
 
     def handle_auth_request(self, payload):
         try:
