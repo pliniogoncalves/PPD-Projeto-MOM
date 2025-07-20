@@ -97,3 +97,19 @@ py user.py
     * Feche a aplicação do usuário `bruno`.
     * Na tela de `ana`, envie outra mensagem privada para `bruno`. O contador dele no Gerenciador irá para `1`.
     * Inicie a aplicação de `bruno` novamente e faça login. A mensagem pendente deve ser entregue imediatamente, e o contador no Gerenciador deve zerar.
+
+## 🔁 Outras Versões do Projeto
+
+Este repositório também contém implementações alternativas para estudo e comparação, disponíveis em branches separadas:
+
+- **Versão RabbitMQ Pura:**
+
+```bash
+git checkout versao-rabbitmq
+```
+
+- **Versão MQTT-RabbitMQ (Hibrido das duas tecnologias):**
+
+```bash
+git checkout versao-mqtt-rabbitmq-hibrido
+```
