@@ -3,6 +3,7 @@ from mqtt_client import MQTTClient
 import datetime
 import queue
 import uuid
+import json
 
 UNIQUE_PREFIX = "ppd-plinio-final/"
 COLOR_ONLINE = "#1F6AA5"
@@ -19,6 +20,8 @@ TOPIC_USER_MSG_BASE = f"{UNIQUE_PREFIX}usuarios"
 TOPIC_ACK_BASE = f"{UNIQUE_PREFIX}sistema/ack"
 TOPIC_AUTH_REQUEST = f"{UNIQUE_PREFIX}sistema/auth/request"
 TOPIC_AUTH_RESPONSE_BASE = f"{UNIQUE_PREFIX}sistema/auth/response"
+TOPIC_SUB_REQUEST = f"{UNIQUE_PREFIX}sistema/subscriptions/request"
+TOPIC_SUB_RESPONSE = f"{UNIQUE_PREFIX}sistema/subscriptions/response"
 
 
 class UserApp(ctk.CTk):
@@ -72,7 +75,6 @@ class UserApp(ctk.CTk):
             self.login_button.configure(state="normal", text="Entrar")
 
     def handle_auth_response(self, client, userdata, message):
-        """ NOVO: Processa a resposta do gerente. """
         payload = message.payload.decode()
         self.auth_client.disconnect()
 
@@ -84,7 +86,6 @@ class UserApp(ctk.CTk):
             self.login_button.configure(state="normal", text="Entrar")
             
     def proceed_with_main_login(self):
-        """ NOVO: Lógica principal de login, só executa após validação. """
         self.login_frame.destroy()
         self.geometry("900x700")
         self.title(f"MOM - Usuário: {self.user_name}")
@@ -102,8 +103,11 @@ class UserApp(ctk.CTk):
         
         if self.mqtt_client.connect():
             self.personal_topic = f"{TOPIC_USER_MSG_BASE}/{self.user_name}"
-            self.mqtt_client.subscribe(self.personal_topic, qos=1)
+            self.response_topic = f"{TOPIC_SUB_RESPONSE}/{self.user_name}"
+            self.request_topic = f"{TOPIC_SUB_REQUEST}/{self.user_name}"
             
+            self.mqtt_client.subscribe(self.personal_topic, qos=1)
+            self.mqtt_client.subscribe(self.response_topic, qos=1)
             self.mqtt_client.subscribe(TOPIC_MGMT_USERS_WILDCARD, qos=1)
             self.mqtt_client.subscribe(TOPIC_MGMT_TOPICS_WILDCARD, qos=1)
             self.mqtt_client.subscribe(TOPIC_PRESENCE, qos=0)
@@ -111,6 +115,8 @@ class UserApp(ctk.CTk):
             
             self.mqtt_client.publish(TOPIC_PRESENCE, f"{self.user_name}:ONLINE", retain=True)
             self.request_presence_status()
+            self.mqtt_client.publish(self.request_topic, "get", qos=1)
+            self.add_log("Solicitando estado de inscrições ao gerenciador...")
             self.add_log(f"Conectado como '{self.user_name}'. Sessão persistente ativada.")
             self.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.process_gui_queue()
@@ -131,6 +137,17 @@ class UserApp(ctk.CTk):
         self.gui_queue.put(lambda: self.handle_message(message.topic, message.payload.decode()))
 
     def handle_message(self, topic, payload):
+        if topic == self.response_topic:
+            try:
+                subs = json.loads(payload)
+                self.active_subscriptions = set(subs)
+                self.add_log(f"Estado de inscrições sincronizado. {len(subs)} tópico(s) ativo(s).")
+                self.update_topics_list_display()
+                self.update_send_selectors()
+            except json.JSONDecodeError:
+                self.add_log("Erro ao decodificar a resposta de estado do gerenciador.")
+            return
+
         if topic == self.personal_topic:
             if payload:
                 self.add_log(f"(Privado) de {payload}")
@@ -271,6 +288,10 @@ class UserApp(ctk.CTk):
         self.mqtt_client.subscribe(full_topic_path, qos=1)
         self.active_subscriptions.add(topic_name)
         self.add_log(f"Inscrito no tópico: {topic_name}")
+
+        payload = json.dumps({"action": "subscribe", "topic": topic_name})
+        self.mqtt_client.publish(self.request_topic, payload, qos=1)
+
         self.update_topics_list_display()
         self.update_send_selectors()
 
@@ -279,6 +300,10 @@ class UserApp(ctk.CTk):
         self.mqtt_client.unsubscribe(full_topic_path)
         self.active_subscriptions.discard(topic_name)
         self.add_log(f"Inscrição cancelada para: {topic_name}")
+
+        payload = json.dumps({"action": "unsubscribe", "topic": topic_name})
+        self.mqtt_client.publish(self.request_topic, payload, qos=1)
+
         self.update_topics_list_display()
         self.update_send_selectors()
         
