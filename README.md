@@ -64,3 +64,21 @@ python admin_rabbitmq.py
 #Nos outros Terminais (Os Usuários):
 
 python user_rabbitmq.py
+
+```
+
+## 🔁 Outras Versões do Projeto
+
+Este repositório também contém implementações alternativas para estudo e comparação, disponíveis em branches separadas:
+
+- **Versão MTQQ Pura:**
+
+```bash
+git checkout versao-mqtt
+```
+
+- **Versão MQTT-RabbitMQ (Hibrido das duas tecnologias):**
+
+```bash
+git checkout versao-mqtt-rabbitmq-hibrido
+```
