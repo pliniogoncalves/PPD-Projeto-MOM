@@ -1,6 +1,8 @@
 import customtkinter as ctk
 from mqtt_client import MQTTClient
 import queue
+import threading
+import time      
 
 UNIQUE_PREFIX = "ppd-plinio-final/"
 COLOR_ONLINE = "#1F6AA5"
@@ -32,12 +34,12 @@ class ManagerApp(ctk.CTk):
         self.gui_queue = queue.Queue()
         self.mqtt_client = MQTTClient(broker_address="broker.hivemq.com", on_message_callback=self.on_message)
         if self.mqtt_client.connect():
-            self.mqtt_client.subscribe(f"{TOPIC_MGMT_USERS}/+")
-            self.mqtt_client.subscribe(f"{TOPIC_MGMT_TOPICS}/+")
-            self.mqtt_client.subscribe(TOPIC_USER_MSG_WILDCARD)
-            self.mqtt_client.subscribe(TOPIC_ACK_WILDCARD)
-            self.mqtt_client.subscribe(TOPIC_PRESENCE)
-            self.mqtt_client.subscribe(TOPIC_AUTH_REQUEST)
+            self.mqtt_client.subscribe(f"{TOPIC_MGMT_USERS}/+", qos=1)
+            self.mqtt_client.subscribe(f"{TOPIC_MGMT_TOPICS}/+", qos=1)
+            self.mqtt_client.subscribe(TOPIC_USER_MSG_WILDCARD, qos=1)
+            self.mqtt_client.subscribe(TOPIC_ACK_WILDCARD, qos=0)
+            self.mqtt_client.subscribe(TOPIC_PRESENCE, qos=1)
+            self.mqtt_client.subscribe(TOPIC_AUTH_REQUEST, qos=0)
             self.add_log("Cliente MQTT conectado e inscrito nos tópicos.")
         else:
             self.add_log("FALHA AO CONECTAR AO BROKER.")
@@ -67,10 +69,10 @@ class ManagerApp(ctk.CTk):
         try:
             user_to_check, response_topic = payload.split(";")
             if user_to_check in self.users:
-                self.mqtt_client.publish(response_topic, "VALIDO")
+                self.mqtt_client.publish(response_topic, "VALIDO", qos=0)
                 self.add_log(f"AUTH: Login validado para o usuário '{user_to_check}'.")
             else:
-                self.mqtt_client.publish(response_topic, "INVALIDO")
+                self.mqtt_client.publish(response_topic, "INVALIDO", qos=0)
                 self.add_log(f"AUTH: Login negado para o usuário inexistente '{user_to_check}'.")
         except ValueError:
             self.add_log(f"AUTH: Recebida requisição de autenticação mal formatada: {payload}")
@@ -89,14 +91,14 @@ class ManagerApp(ctk.CTk):
             user_name = topic.split('/')[-1]
             if user_name in self.message_counts:
                 self.message_counts[user_name] += 1
-                self.add_log(f"INFO: Mensagem enviada para {user_name}. Contador incrementado.")
+                self.add_log(f"INFO: Mensagem enviada para {user_name}. Contador da fila: {self.message_counts[user_name]}.")
                 self.update_counts_display()
 
     def handle_ack_message(self, topic):
         user_name = topic.split('/')[-1]
         if user_name in self.message_counts and self.message_counts[user_name] > 0:
             self.message_counts[user_name] -= 1
-            self.add_log(f"INFO: {user_name} confirmou recebimento. Contador decrementado.")
+            self.add_log(f"INFO: {user_name} consumiu mensagem. Contador da fila: {self.message_counts[user_name]}.")
             self.update_counts_display()
 
     def handle_user_sync(self, topic, payload):
@@ -177,6 +179,25 @@ class ManagerApp(ctk.CTk):
         self.log_textbox.configure(state="disabled")
         self.log_textbox.see("end")
 
+    def _prime_user_session(self, username):
+        self.add_log(f"Preparando sessão persistente para o novo usuário: {username}...")
+        
+        temp_client = MQTTClient(broker_address="broker.hivemq.com", 
+                                 client_id=username, 
+                                 clean_session=False)
+        
+        if temp_client.connect():
+            private_topic = f"{TOPIC_USER_MSG_BASE}/{username}"
+            temp_client.subscribe(private_topic, qos=1)
+            
+            time.sleep(1) 
+            
+            temp_client.disconnect()
+            self.add_log(f"Sessão para '{username}' preparada com sucesso no broker.")
+        else:
+            self.add_log(f"FALHA ao preparar a sessão para '{username}'.")
+
+
     def add_user(self):
         user_name = self.user_entry.get().strip()
         if not user_name:
@@ -185,13 +206,21 @@ class ManagerApp(ctk.CTk):
         if user_name in self.users:
             self.add_log(f"ERRO: Usuário '{user_name}' já existe.")
             return
+            
         self.mqtt_client.publish(f"{TOPIC_MGMT_USERS}/{user_name}", "ADD", retain=True)
+        
+        threading.Thread(target=self._prime_user_session, args=(user_name,), daemon=True).start()
+        
         self.add_log(f"Comando para adicionar usuário '{user_name}' publicado.")
         self.user_entry.delete(0, "end")
     
     def remove_user(self, user_name):
         self.mqtt_client.publish(TOPIC_PRESENCE, f"{user_name}:OFFLINE", retain=True)
         self.mqtt_client.publish(f"{TOPIC_MGMT_USERS}/{user_name}", "", retain=True)
+        
+        user_private_topic = f"{TOPIC_USER_MSG_BASE}/{user_name}"
+        self.mqtt_client.publish(user_private_topic, "", retain=True, qos=1)
+
         self.add_log(f"Comando para remover usuário '{user_name}' publicado.")
 
     def add_topic(self):
@@ -266,7 +295,8 @@ class ManagerApp(ctk.CTk):
             label.pack(fill="x", padx=10, pady=2)
 
     def on_closing(self):
-        self.mqtt_client.disconnect()
+        if self.mqtt_client:
+            self.mqtt_client.disconnect()
         self.destroy()
 
 if __name__ == "__main__":

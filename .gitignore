@@ -60,3 +60,6 @@ venv.bak/
 # IDE settings
 .idea/
 .vscode/
+
+topicos_hibrido.txt
+usuarios_hibrido.txt
